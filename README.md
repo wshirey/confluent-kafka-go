@@ -12,8 +12,8 @@ client.
 
 - **Reliability** - There are a lot of details to get right when writing an Apache Kafka
 client. We get them right in one place (librdkafka) and leverage this work
-across all of our clients (also [confluent-kafka-python](https://github.com/confluentinc/confluent-kafka-python)
-and [confluent-kafka-dotnet](https://github.com/confluentinc/confluent-kafka-dotnet)).
+across all of our clients (also [confluent-kafka-python](https://github.com/wshirey/confluent-kafka-python)
+and [confluent-kafka-dotnet](https://github.com/wshirey/confluent-kafka-dotnet)).
 
 - **Supported** - Commercial support is offered by
 [Confluent](https://confluent.io/).

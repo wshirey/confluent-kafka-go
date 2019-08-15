@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"io/ioutil"
 	"log"
 	"net"

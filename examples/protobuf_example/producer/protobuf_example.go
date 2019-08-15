@@ -19,8 +19,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/examples/protobuf_example/pb_example"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/examples/protobuf_example/pb_example"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"github.com/golang/protobuf/proto"
 	"log"
 	"os"

@@ -3,7 +3,7 @@ package avro
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"github.com/golang/groupcache/lru"
 	"log"
 	"sync"
@@ -144,7 +144,7 @@ type client struct {
 
 // SchemaRegistryClient is an interface for clients interacting with the Confluent Schema Registry.
 // The Schema Registry's REST interface is further explained in Confluent's Schema Registry API documentation
-// https://github.com/confluentinc/schema-registry/blob/master/client/src/main/java/io/confluent/kafka/schemaregistry/client/SchemaRegistryClient.java
+// https://github.com/wshirey/schema-registry/blob/master/client/src/main/java/io/confluent/kafka/schemaregistry/client/SchemaRegistryClient.java
 type SchemaRegistryClient interface {
 	Register(subject string, schema Schema) (id int, err error)
 	GetByID(id int) (schema Schema, err error)

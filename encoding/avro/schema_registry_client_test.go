@@ -4,7 +4,7 @@ import (
 "fmt"
 "sort"
 "testing"
-"github.com/confluentinc/confluent-kafka-go/kafka"
+"github.com/wshirey/confluent-kafka-go/kafka"
 "strconv"
 	"log"
 )

@@ -19,9 +19,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"os"
-	"github.com/confluentinc/confluent-kafka-go/encoding/avro"
+	"github.com/wshirey/confluent-kafka-go/encoding/avro"
 	"os/signal"
 	"syscall"
 	"log"
@@ -55,7 +55,7 @@ func main() {
 	deliveryChan := make(chan kafka.Event)
 	// Optional delivery channel, if not specified the Producer object's Events channel is used.
 
-	schema, err := avro.ParseFile("/Users/ryan/go/src/github.com/confluentinc/confluent-kafka-go/encoding/avro/schemas/advanced.avsc")
+	schema, err := avro.ParseFile("/Users/ryan/go/src/github.com/wshirey/confluent-kafka-go/encoding/avro/schemas/advanced.avsc")
 
 		log.Println(p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},

@@ -20,7 +20,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"os"
 	"time"
 )

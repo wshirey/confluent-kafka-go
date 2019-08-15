@@ -9,9 +9,9 @@ os:
   - osx
 env:
   global:
-    - PKG_CONFIG_PATH="$HOME/gopath/src/github.com/confluentinc/confluent-kafka-go/tmp-build/lib/pkgconfig"
-    - LD_LIBRARY_PATH="$HOME/gopath/src/github.com/confluentinc/confluent-kafka-go/tmp-build/lib"
-    - DYLD_LIBRARY_PATH="$HOME/gopath/src/github.com/confluentinc/confluent-kafka-go/tmp-build/lib"
+    - PKG_CONFIG_PATH="$HOME/gopath/src/github.com/wshirey/confluent-kafka-go/tmp-build/lib/pkgconfig"
+    - LD_LIBRARY_PATH="$HOME/gopath/src/github.com/wshirey/confluent-kafka-go/tmp-build/lib"
+    - DYLD_LIBRARY_PATH="$HOME/gopath/src/github.com/wshirey/confluent-kafka-go/tmp-build/lib"
     - PATH="$PATH:$GOPATH/bin"
     - LIBRDKAFKA_VERSION=master
 

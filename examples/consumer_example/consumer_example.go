@@ -22,7 +22,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/wshirey/confluent-kafka-go/kafka"
 	"os"
 	"os/signal"
 	"syscall"

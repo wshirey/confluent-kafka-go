@@ -10,9 +10,9 @@ from bs4 import BeautifulSoup
 
 
 if __name__ == '__main__':
-    
+
     # Use godoc client to extract our package docs
-    html_in = subprocess.check_output(["godoc", "-url=/pkg/github.com/confluentinc/confluent-kafka-go/kafka"])
+    html_in = subprocess.check_output(["godoc", "-url=/pkg/github.com/wshirey/confluent-kafka-go/kafka"])
 
     # Parse HTML
     soup = BeautifulSoup(html_in, 'html.parser')
