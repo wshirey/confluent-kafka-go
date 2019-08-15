@@ -31,7 +31,7 @@ func handleStatsEvent(t *testing.T, eventCh chan Event, statsReceived chan bool)
 
 			// test if the stats string can be decoded into JSON
 			var raw map[string]interface{}
-			err := json.Unmarshal([]byte(e.String()), &raw) // convert string to json
+			err := json.Unmarshal([]byte(e.String()), &raw) // convert json to map
 			if err != nil {
 				t.Fatalf("json unmarshall error: %s", err)
 			}
@@ -58,7 +58,7 @@ func testProducerFunc(t *testing.T, withProducerChannel bool) {
 	p, err := NewProducer(&ConfigMap{
 		"statistics.interval.ms": 50,
 		"socket.timeout.ms":      10,
-		"default.topic.config":   ConfigMap{"message.timeout.ms": 10}})
+		"message.timeout.ms":     10})
 	if err != nil {
 		t.Fatalf("%s", err)
 	}

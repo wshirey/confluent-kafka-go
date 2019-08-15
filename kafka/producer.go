@@ -413,7 +413,15 @@ func NewProducer(conf *ConfigMap) (*Producer, error) {
 	// the original is not mutated.
 	confCopy := conf.clone()
 
-	v, err := confCopy.extract("go.batch.producer", false)
+	v, err := confCopy.extract("delivery.report.only.error", false)
+	if v == true {
+		// FIXME: The filtering of successful DRs must be done in
+		//        the Go client to avoid cgoDr memory leaks.
+		return nil, newErrorFromString(ErrUnsupportedFeature,
+			"delivery.report.only.error=true is not currently supported by the Go client")
+	}
+
+	v, err = confCopy.extract("go.batch.producer", false)
 	if err != nil {
 		return nil, err
 	}
@@ -437,10 +445,13 @@ func NewProducer(conf *ConfigMap) (*Producer, error) {
 	}
 	produceChannelSize := v.(int)
 
-	v, _ = confCopy.extract("{topic}.produce.offset.report", nil)
-	if v == nil {
-		// Enable offset reporting by default, unless overriden.
-		confCopy.SetKey("{topic}.produce.offset.report", true)
+	if int(C.rd_kafka_version()) < 0x01000000 {
+		// produce.offset.report is no longer used in librdkafka >= v1.0.0
+		v, _ = confCopy.extract("{topic}.produce.offset.report", nil)
+		if v == nil {
+			// Enable offset reporting by default, unless overriden.
+			confCopy.SetKey("{topic}.produce.offset.report", true)
+		}
 	}
 
 	// Convert ConfigMap to librdkafka conf_t
@@ -452,7 +463,7 @@ func NewProducer(conf *ConfigMap) (*Producer, error) {
 	cErrstr := (*C.char)(C.malloc(C.size_t(256)))
 	defer C.free(unsafe.Pointer(cErrstr))
 
-	C.rd_kafka_conf_set_events(cConf, C.RD_KAFKA_EVENT_DR|C.RD_KAFKA_EVENT_STATS|C.RD_KAFKA_EVENT_ERROR)
+	C.rd_kafka_conf_set_events(cConf, C.RD_KAFKA_EVENT_DR|C.RD_KAFKA_EVENT_STATS|C.RD_KAFKA_EVENT_ERROR|C.RD_KAFKA_EVENT_OAUTHBEARER_TOKEN_REFRESH)
 
 	// Create librdkafka producer instance
 	p.handle.rk = C.rd_kafka_new(C.RD_KAFKA_PRODUCER, cConf, cErrstr, 256)
@@ -601,6 +612,7 @@ out:
 // If topic is non-nil only information about that topic is returned, else if
 // allTopics is false only information about locally used topics is returned,
 // else information about all topics is returned.
+// GetMetadata is equivalent to listTopics, describeTopics and describeCluster in the Java API.
 func (p *Producer) GetMetadata(topic *string, allTopics bool, timeoutMs int) (*Metadata, error) {
 	return getMetadata(p, topic, allTopics, timeoutMs)
 }
@@ -627,4 +639,40 @@ func (p *Producer) QueryWatermarkOffsets(topic string, partition int32, timeoutM
 // Per-partition errors may be returned in the `.Error` field.
 func (p *Producer) OffsetsForTimes(times []TopicPartition, timeoutMs int) (offsets []TopicPartition, err error) {
 	return offsetsForTimes(p, times, timeoutMs)
+}
+
+// GetFatalError returns an Error object if the client instance has raised a fatal error, else nil.
+func (p *Producer) GetFatalError() error {
+	return getFatalError(p)
+}
+
+// TestFatalError triggers a fatal error in the underlying client.
+// This is to be used strictly for testing purposes.
+func (p *Producer) TestFatalError(code ErrorCode, str string) ErrorCode {
+	return testFatalError(p, code, str)
+}
+
+// SetOAuthBearerToken sets the the data to be transmitted
+// to a broker during SASL/OAUTHBEARER authentication. It will return nil
+// on success, otherwise an error if:
+// 1) the token data is invalid (meaning an expiration time in the past
+// or either a token value or an extension key or value that does not meet
+// the regular expression requirements as per
+// https://tools.ietf.org/html/rfc7628#section-3.1);
+// 2) SASL/OAUTHBEARER is not supported by the underlying librdkafka build;
+// 3) SASL/OAUTHBEARER is supported but is not configured as the client's
+// authentication mechanism.
+func (p *Producer) SetOAuthBearerToken(oauthBearerToken OAuthBearerToken) error {
+	return p.handle.setOAuthBearerToken(oauthBearerToken)
+}
+
+// SetOAuthBearerTokenFailure sets the error message describing why token
+// retrieval/setting failed; it also schedules a new token refresh event for 10
+// seconds later so the attempt may be retried. It will return nil on
+// success, otherwise an error if:
+// 1) SASL/OAUTHBEARER is not supported by the underlying librdkafka build;
+// 2) SASL/OAUTHBEARER is supported but is not configured as the client's
+// authentication mechanism.
+func (p *Producer) SetOAuthBearerTokenFailure(errstr string) error {
+	return p.handle.setOAuthBearerTokenFailure(errstr)
 }

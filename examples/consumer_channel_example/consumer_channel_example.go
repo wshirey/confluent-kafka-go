@@ -46,7 +46,10 @@ func main() {
 		"session.timeout.ms":              6000,
 		"go.events.channel.enable":        true,
 		"go.application.rebalance.enable": true,
-		"default.topic.config":            kafka.ConfigMap{"auto.offset.reset": "earliest"}})
+		// Enable generation of PartitionEOF when the
+		// end of a partition is reached.
+		"enable.partition.eof": true,
+		"auto.offset.reset":    "earliest"})
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create consumer: %s\n", err)
@@ -79,8 +82,8 @@ func main() {
 			case kafka.PartitionEOF:
 				fmt.Printf("%% Reached %v\n", e)
 			case kafka.Error:
+				// Errors should generally be considered as informational, the client will try to automatically recover
 				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
-				run = false
 			}
 		}
 	}

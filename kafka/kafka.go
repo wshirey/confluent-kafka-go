@@ -44,7 +44,7 @@
 // mentioned above. You will (eventually) see a `kafka.AssignedPartitions` event
 // with the assigned partition set. You can optionally modify the initial
 // offsets (they'll default to stored offsets and if there are no previously stored
-// offsets it will fall back to `"default.topic.config": ConfigMap{"auto.offset.reset": ..}`
+// offsets it will fall back to `"auto.offset.reset"`
 // which defaults to the `latest` message) and then call `.Assign(partitions)`
 // to start consuming. If you don't need to modify the initial offsets you will
 // not need to call `.Assign()`, the client will do so automatically for you if
@@ -104,7 +104,7 @@
 // Requires `go.application.rebalance.enable`
 //
 // * `RevokedPartitions` - The counter part to `AssignedPartitions` following a rebalance.
-// `AssignedPartitions` and `RevokedPartitions` are symetrical.
+// `AssignedPartitions` and `RevokedPartitions` are symmetrical.
 // Requires `go.application.rebalance.enable`
 //
 // * `PartitionEOF` - Consumer has reached the end of a partition.
@@ -124,6 +124,15 @@
 // * `KafkaError` - client (error codes are prefixed with _) or broker error.
 // These errors are normally just informational since the
 // client will try its best to automatically recover (eventually).
+//
+// * `OAuthBearerTokenRefresh` - retrieval of a new SASL/OAUTHBEARER token is required.
+// This event only occurs with sasl.mechanism=OAUTHBEARER.
+// Be sure to invoke SetOAuthBearerToken() on the Producer/Consumer/AdminClient
+// instance when a successful token retrieval is completed, otherwise be sure to
+// invoke SetOAuthBearerTokenFailure() to indicate that retrieval failed (or
+// if setting the token failed, which could happen if an extension doesn't meet
+// the required regular expression); invoking SetOAuthBearerTokenFailure() will
+// schedule a new event for 10 seconds later so another retrieval can be attempted.
 //
 //
 // Hint: If your application registers a signal notification
@@ -158,6 +167,7 @@ type TopicPartition struct {
 	Topic     *string
 	Partition int32
 	Offset    Offset
+	Metadata  *string
 	Error     error
 }
 
@@ -204,6 +214,12 @@ func newCPartsFromTopicPartitions(partitions []TopicPartition) (cparts *C.rd_kaf
 		defer C.free(unsafe.Pointer(ctopic))
 		rktpar := C.rd_kafka_topic_partition_list_add(cparts, ctopic, C.int32_t(part.Partition))
 		rktpar.offset = C.int64_t(part.Offset)
+
+		if part.Metadata != nil {
+			cmetadata := C.CString(*part.Metadata)
+			rktpar.metadata = unsafe.Pointer(cmetadata)
+			rktpar.metadata_size = C.size_t(len(*part.Metadata))
+		}
 	}
 
 	return cparts
@@ -215,6 +231,12 @@ func setupTopicPartitionFromCrktpar(partition *TopicPartition, crktpar *C.rd_kaf
 	partition.Topic = &topic
 	partition.Partition = int32(crktpar.partition)
 	partition.Offset = Offset(crktpar.offset)
+	if crktpar.metadata_size > 0 {
+		size := C.int(crktpar.metadata_size)
+		cstr := (*C.char)(unsafe.Pointer(crktpar.metadata))
+		metadata := C.GoStringN(cstr, size)
+		partition.Metadata = &metadata
+	}
 	if crktpar.err != C.RD_KAFKA_RESP_ERR_NO_ERROR {
 		partition.Error = newError(crktpar.err)
 	}

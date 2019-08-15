@@ -171,8 +171,8 @@ func runConsumer(config *kafka.ConfigMap, topics []string) {
 					run = false
 				}
 			case kafka.Error:
+				// Errors should generally be considered as informational, the client will try to automatically recover
 				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
-				run = false
 			case kafka.OffsetsCommitted:
 				if verbosity >= 2 {
 					fmt.Fprintf(os.Stderr, "%% %v\n", e)
@@ -241,14 +241,17 @@ func main() {
 
 	switch mode {
 	case "produce":
-		confargs.conf["default.topic.config"] = kafka.ConfigMap{"produce.offset.report": true}
+		confargs.conf["produce.offset.report"] = true
 		runProducer((*kafka.ConfigMap)(&confargs.conf), *topic, int32(*partition))
 
 	case "consume":
 		confargs.conf["group.id"] = *group
 		confargs.conf["go.events.channel.enable"] = true
 		confargs.conf["go.application.rebalance.enable"] = true
-		confargs.conf["default.topic.config"] = kafka.ConfigMap{"auto.offset.reset": *initialOffset}
+		confargs.conf["auto.offset.reset"] = *initialOffset
+		// Enable generation of PartitionEOF events to track
+		// when end of partition is reached.
+		confargs.conf["enable.partition.eof"] = exitEOF
 		runConsumer((*kafka.ConfigMap)(&confargs.conf), *topics)
 	}
 

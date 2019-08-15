@@ -1,8 +1,12 @@
-// Example function-based high-level Apache Kafka consumer
+// Example of a consumer handling statistics events.
+// The Stats handling code is the same for Consumers and Producers.
+//
+// The definition of the emitted statistics JSON object can be found here:
+// https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
 package main
 
 /**
- * Copyright 2016 Confluent Inc.
+ * Copyright 2019 Confluent Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +21,8 @@ package main
  * limitations under the License.
  */
 
-// consumer_example implements a consumer using the non-channel Poll() API
-// to retrieve messages and events.
-
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"os"
@@ -43,16 +45,14 @@ func main() {
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers": broker,
-		// Avoid connecting to IPv6 brokers:
-		// This is needed for the ErrAllBrokersDown show-case below
-		// when using localhost brokers on OSX, since the OSX resolver
-		// will return the IPv6 addresses first.
-		// You typically don't need to specify this configuration property.
-		"broker.address.family": "v4",
-		"group.id":              group,
-		"session.timeout.ms":    6000,
-		"auto.offset.reset":     "earliest"})
+		"bootstrap.servers":  broker,
+		"group.id":           group,
+		"session.timeout.ms": 6000,
+		"auto.offset.reset":  "earliest",
+		// Statistics output from the client may be enabled
+		// by setting statistics.interval.ms and
+		// handling kafka.Stats events (see below).
+		"statistics.interval.ms": 5000})
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create consumer: %s\n", err)
@@ -84,15 +84,24 @@ func main() {
 					fmt.Printf("%% Headers: %v\n", e.Headers)
 				}
 			case kafka.Error:
-				// Errors should generally be considered
-				// informational, the client will try to
-				// automatically recover.
-				// But in this example we choose to terminate
-				// the application if all brokers are down.
-				fmt.Fprintf(os.Stderr, "%% Error: %v: %v\n", e.Code(), e)
-				if e.Code() == kafka.ErrAllBrokersDown {
-					run = false
-				}
+				// The client will automatically try to
+				// recover from all types of errors.
+				// There is typically no need for an
+				// application to handle errors other
+				// than to log them.
+				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
+			case *kafka.Stats:
+				// Stats events are emitted as JSON (as string).
+				// Either directly forward the JSON to your
+				// statistics collector, or convert it to a
+				// map to extract fields of interest.
+				// The definition of the statistics JSON
+				// object can be found here:
+				// https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
+				var stats map[string]interface{}
+				json.Unmarshal([]byte(e.String()), &stats)
+				fmt.Printf("Stats: %v messages (%v bytes) messages consumed\n",
+					stats["rxmsgs"], stats["rxmsg_bytes"])
 			default:
 				fmt.Printf("Ignored %v\n", e)
 			}

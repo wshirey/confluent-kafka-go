@@ -40,7 +40,7 @@ High-level balanced consumer
 ```golang
 import (
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"gopkg.in/confluentinc/confluent-kafka-go.v1/kafka"
 )
 
 func main() {
@@ -62,8 +62,8 @@ func main() {
 		if err == nil {
 			fmt.Printf("Message on %s: %s\n", msg.TopicPartition, string(msg.Value))
 		} else {
+			// The client will automatically try to recover from all errors.
 			fmt.Printf("Consumer error: %v (%v)\n", err, msg)
-			break
 		}
 	}
 
@@ -76,7 +76,7 @@ Producer
 ```golang
 import (
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"gopkg.in/confluentinc/confluent-kafka-go.v1/kafka"
 )
 
 func main() {
@@ -111,12 +111,12 @@ func main() {
 		}, nil)
 	}
 
-	// Wait for message deliveries
+	// Wait for message deliveries before shutting down
 	p.Flush(15 * 1000)
 }
 ```
 
-More elaborate examples are available in the [examples](examples) directory, 
+More elaborate examples are available in the [examples](examples) directory,
 including [how to configure](examples/confluent_cloud_example) the Go client
 for use with [Confluent Cloud](https://www.confluent.io/confluent-cloud/).
 
@@ -127,14 +127,15 @@ Getting Started
 Installing librdkafka
 ---------------------
 
-This client for Go depends on librdkafka v0.11.4 or later, so you either need to install librdkafka through your OS/distributions package manager,
-or download and build it from source.
+This client for Go depends on librdkafka v1.1.0 or later, so you either need to install librdkafka
+through your OS/distributions package manager, or download and build it from source.
 
 - For Debian and Ubuntu based distros, install `librdkafka-dev` from the standard
 repositories or using [Confluent's Deb repository](http://docs.confluent.io/current/installation.html#installation-apt).
 - For Redhat based distros, install `librdkafka-devel` using [Confluent's YUM repository](http://docs.confluent.io/current/installation.html#rpm-packages-via-yum).
-- For MacOS X, install `librdkafka` from Homebrew.  You may also need to brew install pkg-config if you don't already have it.
-- For Windows, see the `librdkafka.redist` NuGet package.
+- For MacOS X, install `librdkafka` from Homebrew. You may also need to brew install pkg-config if you don't already have it. `brew install librdkafka pkg-config`.
+- For Alpine: `apk add librdkafka-dev pkgconf`
+- confluent-kafka-go is not supported on Windows.
 
 Build from source:
 
@@ -148,23 +149,53 @@ Build from source:
 Install the client
 -------------------
 
+We recommend that you version pin the confluent-kafka-go import to v1:
+
+Manual install:
+```bash
+go get -u gopkg.in/confluentinc/confluent-kafka-go.v1/kafka
 ```
-go get -u github.com/confluentinc/confluent-kafka-go/kafka
+
+Golang import:
+```golang
+import "gopkg.in/confluentinc/confluent-kafka-go.v1/kafka"
 ```
+
+**Note:** that the development of librdkafka and the Go client are kept in synch.
+If you use the master branch of the Go client, then you need to use the master branch of
+librdkafka.
 
 See the [examples](examples) for usage details.
 
-Note that the development of librdkafka and the Go client are kept in synch. So
-if you use HEAD on master of the Go client, then you need to use HEAD on master of
-librdkafka. See this [issue](https://github.com/confluentinc/confluent-kafka-go/issues/61#issuecomment-303746159) for more details.
 
 API Strands
 ===========
 
-There are two main API strands: channel based or function based.
+There are two main API strands: function and channel based.
 
-Channel Based Consumer
-----------------------
+Function Based Consumer
+-----------------------
+
+Messages, errors and events are polled through the consumer.Poll() function.
+
+Pros:
+
+ * More direct mapping to underlying librdkafka functionality.
+
+Cons:
+
+ * Makes it harder to read from multiple channels, but a go-routine easily
+   solves that (see Cons in channel based consumer above about outdated events).
+ * Slower than the channel consumer.
+
+See [examples/consumer_example](examples/consumer_example)
+
+
+Channel Based Consumer (deprecated)
+-----------------------------------
+
+*Deprecated*: The channel based consumer is deprecated due to the channel issues
+              mentioned below. Use the function based consumer.
 
 Messages, errors and events are posted on the consumer.Events channel
 for the application to read.
@@ -185,22 +216,6 @@ See [examples/consumer_channel_example](examples/consumer_channel_example)
 
 
 
-Function Based Consumer
------------------------
-
-Messages, errors and events are polled through the consumer.Poll() function.
-
-Pros:
-
- * More direct mapping to underlying librdkafka functionality.
-
-Cons:
-
- * Makes it harder to read from multiple channels, but a go-routine easily
-   solves that (see Cons in channel based consumer above about outdated events).
- * Slower than the channel consumer.
-
-See [examples/consumer_example](examples/consumer_example)
 
 
 

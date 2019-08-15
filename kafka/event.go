@@ -117,6 +117,8 @@ func (e RevokedPartitions) String() string {
 }
 
 // PartitionEOF consumer reached end of partition
+// Needs to be explicitly enabled by setting the `enable.partition.eof`
+// configuration property to true.
 type PartitionEOF TopicPartition
 
 func (p PartitionEOF) String() string {
@@ -131,6 +133,16 @@ type OffsetsCommitted struct {
 
 func (o OffsetsCommitted) String() string {
 	return fmt.Sprintf("OffsetsCommitted (%v, %v)", o.Error, o.Offsets)
+}
+
+// OAuthBearerTokenRefresh indicates token refresh is required
+type OAuthBearerTokenRefresh struct {
+	// Config is the value of the sasl.oauthbearer.config property
+	Config string
+}
+
+func (o OAuthBearerTokenRefresh) String() string {
+	return "OAuthBearerTokenRefresh"
 }
 
 // eventPoll polls an event from the handler's C rd_kafka_queue_t,
@@ -217,8 +229,7 @@ out:
 		case C.RD_KAFKA_EVENT_ERROR:
 			// Error event
 			cErr := C.rd_kafka_event_error(rkev)
-			switch cErr {
-			case C.RD_KAFKA_RESP_ERR__PARTITION_EOF:
+			if cErr == C.RD_KAFKA_RESP_ERR__PARTITION_EOF {
 				crktpar := C.rd_kafka_event_topic_partition(rkev)
 				if crktpar == nil {
 					break
@@ -229,7 +240,21 @@ out:
 				setupTopicPartitionFromCrktpar((*TopicPartition)(&peof), crktpar)
 
 				retval = peof
-			default:
+
+			} else if int(C.rd_kafka_event_error_is_fatal(rkev)) != 0 {
+				// A fatal error has been raised.
+				// Extract the actual error from the client
+				// instance and return a new Error with
+				// fatal set to true.
+				cFatalErrstrSize := C.size_t(512)
+				cFatalErrstr := (*C.char)(C.malloc(cFatalErrstrSize))
+				defer C.free(unsafe.Pointer(cFatalErrstr))
+				cFatalErr := C.rd_kafka_fatal_error(h.rk, cFatalErrstr, cFatalErrstrSize)
+				fatalErr := newErrorFromCString(cFatalErr, cFatalErrstr)
+				fatalErr.fatal = true
+				retval = fatalErr
+
+			} else {
 				retval = newErrorFromCString(cErr, C.rd_kafka_event_error_string(rkev))
 			}
 
@@ -294,6 +319,10 @@ out:
 			} else {
 				retval = OffsetsCommitted{nil, offsets}
 			}
+
+		case C.RD_KAFKA_EVENT_OAUTHBEARER_TOKEN_REFRESH:
+			ev := OAuthBearerTokenRefresh{C.GoString(C.rd_kafka_event_config_string(rkev))}
+			retval = ev
 
 		case C.RD_KAFKA_EVENT_NONE:
 			// poll timed out: no events available

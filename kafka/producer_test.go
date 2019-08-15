@@ -30,8 +30,8 @@ func TestProducerAPIs(t *testing.T) {
 	// expected message dr count on events channel
 	expMsgCnt := 0
 	p, err := NewProducer(&ConfigMap{
-		"socket.timeout.ms":    10,
-		"default.topic.config": ConfigMap{"message.timeout.ms": 10}})
+		"socket.timeout.ms":  10,
+		"message.timeout.ms": 10})
 	if err != nil {
 		t.Fatalf("%s", err)
 	}
@@ -183,7 +183,9 @@ func TestProducerAPIs(t *testing.T) {
 func TestProducerBufferSafety(t *testing.T) {
 
 	p, err := NewProducer(&ConfigMap{
-		"socket.timeout.ms":    10,
+		"socket.timeout.ms": 10,
+		// Use deprecated default.topic.config here to verify
+		// it still works.
 		"default.topic.config": ConfigMap{"message.timeout.ms": 10}})
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -211,6 +213,67 @@ func TestProducerBufferSafety(t *testing.T) {
 		Headers: []Header{{"hdr", value}, {"hdr2", empty}, {"hdr3", nil}}}, nil)
 
 	p.Flush(100)
+
+	p.Close()
+}
+
+// TestProducerInvalidConfig verifies that invalid configuration is handled correctly.
+func TestProducerInvalidConfig(t *testing.T) {
+
+	_, err := NewProducer(&ConfigMap{
+		"delivery.report.only.error": true,
+	})
+	if err == nil {
+		t.Fatalf("Expected NewProducer() to fail with delivery.report.only.error set")
+	}
+}
+
+func TestProducerOAuthBearerConfig(t *testing.T) {
+	myOAuthConfig := "scope=myscope principal=gotest"
+
+	p, err := NewProducer(&ConfigMap{
+		"security.protocol":       "SASL_PLAINTEXT",
+		"sasl.mechanisms":         "OAUTHBEARER",
+		"sasl.oauthbearer.config": myOAuthConfig,
+	})
+	if err != nil {
+		t.Fatalf("NewProducer failed: %s", err)
+	}
+
+	// Wait for initial OAuthBearerTokenRefresh and check
+	// that its Config string is identical to myOAuthConfig
+	for {
+		ev := <-p.Events()
+		oatr, ok := ev.(OAuthBearerTokenRefresh)
+		if !ok {
+			continue
+		}
+
+		t.Logf("Got %s with Config \"%s\"", oatr, oatr.Config)
+
+		if oatr.Config != myOAuthConfig {
+			t.Fatalf("%s: Expected .Config to be %s, not %s",
+				oatr, myOAuthConfig, oatr.Config)
+		}
+
+		// Verify that we can set a token
+		err = p.SetOAuthBearerToken(OAuthBearerToken{
+			TokenValue: "aaaa",
+			Expiration: time.Now().Add(time.Second * time.Duration(60)),
+			Principal:  "gotest",
+		})
+		if err != nil {
+			t.Fatalf("Failed to set token: %s", err)
+		}
+
+		// Verify that we can set a token refresh failure
+		err = p.SetOAuthBearerTokenFailure("A token failure test")
+		if err != nil {
+			t.Fatalf("Failed to set token failure: %s", err)
+		}
+
+		break
+	}
 
 	p.Close()
 }

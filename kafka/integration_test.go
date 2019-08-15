@@ -18,9 +18,13 @@ package kafka
 
 import (
 	"encoding/base64"
+	"context"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
+	"path"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -177,7 +181,7 @@ func createTestMessages() {
 
 	// a test message for a non-existent partition with Value, Key, and Opaque.
 	// It should generate ErrUnknownPartition
-	testmsgs[i] = &testmsgType{expectedError: Error{ErrUnknownPartition, ""},
+	testmsgs[i] = &testmsgType{expectedError: Error{ErrUnknownPartition, "", false},
 		msg: Message{TopicPartition: TopicPartition{Topic: &testconf.Topic, Partition: int32(10000)},
 			Value:  []byte(fmt.Sprintf("value%d", i)),
 			Key:    []byte(fmt.Sprintf("key%d", i)),
@@ -288,7 +292,7 @@ func producerTest(t *testing.T, testname string, testmsgs []*testmsgType, pc pro
 		"queue.buffering.max.messages": len(testmsgs),
 		"api.version.request":          "true",
 		"broker.version.fallback":      "0.9.0.1",
-		"default.topic.config":         ConfigMap{"acks": 1}}
+		"acks":                         1}
 
 	conf.updateFromTestconf()
 
@@ -391,7 +395,7 @@ func consumerTest(t *testing.T, testname string, msgcnt int, cc consumerCtrl, co
 		"api.version.request":      "true",
 		"enable.auto.commit":       cc.autoCommit,
 		"debug":                    ",",
-		"default.topic.config":     ConfigMap{"auto.offset.reset": "earliest"}}
+		"auto.offset.reset":        "earliest"}
 
 	conf.updateFromTestconf()
 
@@ -484,6 +488,63 @@ func TestConsumerQueryWatermarkOffsets(t *testing.T) {
 
 }
 
+//Test consumer GetWatermarkOffsets API
+func TestConsumerGetWatermarkOffsets(t *testing.T) {
+	if !testconfRead() {
+		t.Skipf("Missing testconf.json")
+	}
+
+	// Create consumer
+	config := &ConfigMap{
+		"go.events.channel.enable": true,
+		"bootstrap.servers":        testconf.Brokers,
+		"group.id":                 testconf.GroupID,
+		"session.timeout.ms":       6000,
+		"enable.auto.commit":       false,
+		"auto.offset.reset":        "earliest",
+	}
+	_ = config.updateFromTestconf()
+
+	c, err := NewConsumer(config)
+	if err != nil {
+		t.Fatalf("Unable to create consumer: %s", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	err = c.Subscribe(testconf.Topic, nil)
+
+	// Prime topic with test messages
+	createTestMessages()
+	producerTest(t, "Priming producer", p0TestMsgs, producerCtrl{silent: true},
+		func(p *Producer, m *Message, drChan chan Event) {
+			p.ProduceChannel() <- m
+		})
+
+	// Wait for messages to be received so that we know the watermark offsets have been delivered
+	// with the fetch response
+	for ev := range c.Events() {
+		if _, ok := ev.(*Message); ok {
+			break
+		}
+	}
+
+	_, queryHigh, err := c.QueryWatermarkOffsets(testconf.Topic, 0, 5*1000)
+	if err != nil {
+		t.Fatalf("Error querying watermark offsets: %s", err)
+	}
+
+	// We are not currently testing the low watermark offset as it only gets set every 10s by the stats timer
+	_, getHigh, err := c.GetWatermarkOffsets(testconf.Topic, 0)
+	if err != nil {
+		t.Fatalf("Error getting watermark offsets: %s", err)
+	}
+
+	if queryHigh != getHigh {
+		t.Errorf("QueryWatermarkOffsets high[%d] does not equal GetWatermarkOffsets high[%d]", queryHigh, getHigh)
+	}
+
+}
+
 //TestConsumerOffsetsForTimes
 func TestConsumerOffsetsForTimes(t *testing.T) {
 	if !testconfRead() {
@@ -558,6 +619,7 @@ func TestConsumerGetMetadata(t *testing.T) {
 
 	config := &ConfigMap{"bootstrap.servers": testconf.Brokers,
 		"group.id": testconf.GroupID}
+	config.updateFromTestconf()
 
 	// Create consumer
 	c, err := NewConsumer(config)
@@ -589,6 +651,7 @@ func TestProducerQueryWatermarkOffsets(t *testing.T) {
 	}
 
 	config := &ConfigMap{"bootstrap.servers": testconf.Brokers}
+	config.updateFromTestconf()
 
 	// Create producer
 	p, err := NewProducer(config)
@@ -632,6 +695,7 @@ func TestProducerGetMetadata(t *testing.T) {
 	}
 
 	config := &ConfigMap{"bootstrap.servers": testconf.Brokers}
+	config.updateFromTestconf()
 
 	// Create producer
 	p, err := NewProducer(config)
@@ -708,6 +772,8 @@ func TestSerializingProducerFuncDR(t *testing.T) {
 // test producer with bad messages
 func TestProducerWithBadMessages(t *testing.T) {
 	conf := ConfigMap{"bootstrap.servers": testconf.Brokers}
+	conf.updateFromTestconf()
+
 	p, err := NewProducer(&conf)
 	if err != nil {
 		panic(err)
@@ -924,19 +990,19 @@ func TestProducerConsumerTimestamps(t *testing.T) {
 		t.Skipf("Missing testconf.json")
 	}
 
-	conf := ConfigMap{"bootstrap.servers": testconf.Brokers,
-		"api.version.request":      true,
+	consumerConf := ConfigMap{"bootstrap.servers": testconf.Brokers,
 		"go.events.channel.enable": true,
 		"group.id":                 testconf.Topic,
+		"enable.partition.eof":     true,
 	}
 
-	conf.updateFromTestconf()
+	consumerConf.updateFromTestconf()
 
 	/* Create consumer and find recognizable message, verify timestamp.
 	 * The consumer is started before the producer to make sure
 	 * the message isn't missed. */
 	t.Logf("Creating consumer")
-	c, err := NewConsumer(&conf)
+	c, err := NewConsumer(&consumerConf)
 	if err != nil {
 		t.Fatalf("NewConsumer: %v", err)
 	}
@@ -960,9 +1026,11 @@ func TestProducerConsumerTimestamps(t *testing.T) {
 	/*
 	 * Create producer and produce one recognizable message with timestamp
 	 */
+	producerConf := ConfigMap{"bootstrap.servers": testconf.Brokers}
+	producerConf.updateFromTestconf()
+
 	t.Logf("Creating producer")
-	conf.SetKey("{topic}.produce.offset.report", true)
-	p, err := NewProducer(&conf)
+	p, err := NewProducer(&producerConf)
 	if err != nil {
 		t.Fatalf("NewProducer: %v", err)
 	}
@@ -1174,4 +1242,411 @@ func TestProducerConsumerHeaders(t *testing.T) {
 	}
 
 	c.Close()
+}
+
+func createAdminClient(t *testing.T) (a *AdminClient) {
+	numver, strver := LibraryVersion()
+	if numver < 0x000b0500 {
+		t.Skipf("Requires librdkafka >=0.11.5 (currently on %s, 0x%x)", strver, numver)
+	}
+
+	if !testconfRead() {
+		t.Skipf("Missing testconf.json")
+	}
+
+	conf := ConfigMap{"bootstrap.servers": testconf.Brokers}
+	conf.updateFromTestconf()
+
+	/*
+	 * Create producer and produce a couple of messages with and without
+	 * headers.
+	 */
+	a, err := NewAdminClient(&conf)
+	if err != nil {
+		t.Fatalf("NewAdminClient: %v", err)
+	}
+
+	return a
+}
+
+func validateTopicResult(t *testing.T, result []TopicResult, expError map[string]Error) {
+	for _, res := range result {
+		exp, ok := expError[res.Topic]
+		if !ok {
+			t.Errorf("Result for unexpected topic %s", res)
+			continue
+		}
+
+		if res.Error.Code() != exp.Code() {
+			t.Errorf("Topic %s: expected \"%s\", got \"%s\"",
+				res.Topic, exp, res.Error)
+			continue
+		}
+
+		t.Logf("Topic %s: matched expected \"%s\"", res.Topic, res.Error)
+	}
+}
+
+func TestAdminTopics(t *testing.T) {
+	rand.Seed(time.Now().Unix())
+
+	a := createAdminClient(t)
+	defer a.Close()
+
+	brokerList, err := getBrokerList(a)
+	if err != nil {
+		t.Fatalf("Failed to retrieve broker list: %v", err)
+	}
+
+	// Few and Many replica sets use in these tests
+	var fewReplicas []int32
+	if len(brokerList) < 2 {
+		fewReplicas = brokerList
+	} else {
+		fewReplicas = brokerList[0:2]
+	}
+
+	var manyReplicas []int32
+	if len(brokerList) < 5 {
+		manyReplicas = brokerList
+	} else {
+		manyReplicas = brokerList[0:5]
+	}
+
+	const topicCnt = 7
+	newTopics := make([]TopicSpecification, topicCnt)
+
+	expError := map[string]Error{}
+
+	for i := 0; i < topicCnt; i++ {
+		topic := fmt.Sprintf("%s-create-%d-%d", testconf.Topic, i, rand.Intn(100000))
+		newTopics[i] = TopicSpecification{
+			Topic:         topic,
+			NumPartitions: 1 + i*2,
+		}
+
+		if (i % 1) == 0 {
+			newTopics[i].ReplicationFactor = len(fewReplicas)
+		} else {
+			newTopics[i].ReplicationFactor = len(manyReplicas)
+		}
+
+		expError[newTopics[i].Topic] = Error{} // No error
+
+		var useReplicas []int32
+		if i == 2 {
+			useReplicas = fewReplicas
+		} else if i == 3 {
+			useReplicas = manyReplicas
+		} else if i == topicCnt-1 {
+			newTopics[i].ReplicationFactor = len(brokerList) + 10
+			expError[newTopics[i].Topic] = Error{code: ErrInvalidReplicationFactor}
+		}
+
+		if len(useReplicas) > 0 {
+			newTopics[i].ReplicaAssignment = make([][]int32, newTopics[i].NumPartitions)
+			newTopics[i].ReplicationFactor = 0
+			for p := 0; p < newTopics[i].NumPartitions; p++ {
+				newTopics[i].ReplicaAssignment[p] = useReplicas
+			}
+		}
+	}
+
+	maxDuration, err := time.ParseDuration("30s")
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+
+	// First just validate the topics, don't create
+	t.Logf("Validating topics before creation\n")
+	ctx, cancel := context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+	result, err := a.CreateTopics(ctx, newTopics,
+		SetAdminValidateOnly(true))
+	if err != nil {
+		t.Fatalf("CreateTopics(ValidateOnly) failed: %s", err)
+	}
+
+	validateTopicResult(t, result, expError)
+
+	// Now create the topics
+	t.Logf("Creating topics\n")
+	ctx, cancel = context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+	result, err = a.CreateTopics(ctx, newTopics, SetAdminValidateOnly(false))
+	if err != nil {
+		t.Fatalf("CreateTopics() failed: %s", err)
+	}
+
+	validateTopicResult(t, result, expError)
+
+	// Attempt to create the topics again, should all fail.
+	t.Logf("Attempt to re-create topics, should all fail\n")
+	for k := range expError {
+		if expError[k].code == ErrNoError {
+			expError[k] = Error{code: ErrTopicAlreadyExists}
+		}
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+	result, err = a.CreateTopics(ctx, newTopics)
+	if err != nil {
+		t.Fatalf("CreateTopics#2() failed: %s", err)
+	}
+
+	validateTopicResult(t, result, expError)
+
+	// Add partitions to some of the topics
+	t.Logf("Create new partitions for a subset of topics\n")
+	newParts := make([]PartitionsSpecification, topicCnt/2)
+	expError = map[string]Error{}
+	for i := 0; i < topicCnt/2; i++ {
+		topic := newTopics[i].Topic
+		newParts[i] = PartitionsSpecification{
+			Topic:      topic,
+			IncreaseTo: newTopics[i].NumPartitions + 3,
+		}
+		if i == 1 {
+			// Invalid partition count (less than current)
+			newParts[i].IncreaseTo = newTopics[i].NumPartitions - 1
+			expError[topic] = Error{code: ErrInvalidPartitions}
+		} else {
+			expError[topic] = Error{}
+		}
+		t.Logf("Creating new partitions for %s: %d -> %d: expecting %v\n",
+			topic, newTopics[i].NumPartitions, newParts[i].IncreaseTo, expError[topic])
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+	result, err = a.CreatePartitions(ctx, newParts)
+	if err != nil {
+		t.Fatalf("CreatePartitions() failed: %s", err)
+	}
+
+	validateTopicResult(t, result, expError)
+
+	// FIXME: wait for topics to become available in metadata instead
+	time.Sleep(5000 * time.Millisecond)
+
+	// Delete the topics
+	deleteTopics := make([]string, topicCnt)
+	for i := 0; i < topicCnt; i++ {
+		deleteTopics[i] = newTopics[i].Topic
+		if i == topicCnt-1 {
+			expError[deleteTopics[i]] = Error{code: ErrUnknownTopicOrPart}
+		} else {
+			expError[deleteTopics[i]] = Error{}
+		}
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+	result2, err := a.DeleteTopics(ctx, deleteTopics)
+	if err != nil {
+		t.Fatalf("DeleteTopics() failed: %s", err)
+	}
+
+	validateTopicResult(t, result2, expError)
+}
+
+func validateConfig(t *testing.T, results []ConfigResourceResult, expResults []ConfigResourceResult, checkConfigEntries bool) {
+
+	_, file, line, _ := runtime.Caller(1)
+	caller := fmt.Sprintf("%s:%d", path.Base(file), line)
+
+	if len(results) != len(expResults) {
+		t.Fatalf("%s: Expected %d results, got %d: %v", caller, len(expResults), len(results), results)
+	}
+
+	for i, result := range results {
+		expResult := expResults[i]
+
+		if result.Error.Code() != expResult.Error.Code() {
+			t.Errorf("%s: %v: Expected %v, got %v", caller, result, expResult.Error.Code(), result.Error.Code())
+			continue
+		}
+
+		if !checkConfigEntries {
+			continue
+		}
+
+		matchCnt := 0
+		for _, expEntry := range expResult.Config {
+
+			entry, ok := result.Config[expEntry.Name]
+			if !ok {
+				t.Errorf("%s: %v: expected config %s not found in result", caller, result, expEntry.Name)
+				continue
+			}
+
+			if entry.Value != expEntry.Value {
+				t.Errorf("%s: %v: expected config %s to have value \"%s\", not \"%s\"", caller, result, expEntry.Name, expEntry.Value, entry.Value)
+				continue
+			}
+
+			matchCnt++
+		}
+
+		if matchCnt != len(expResult.Config) {
+			t.Errorf("%s: %v: only %d/%d expected configs matched", caller, result, matchCnt, len(expResult.Config))
+		}
+	}
+
+	if t.Failed() {
+		t.Fatalf("%s: ConfigResourceResult validation failed: see previous errors", caller)
+	}
+}
+
+func TestAdminConfig(t *testing.T) {
+	rand.Seed(time.Now().Unix())
+
+	a := createAdminClient(t)
+	defer a.Close()
+
+	// Steps:
+	//  1) Create a topic, providing initial non-default configuration
+	//  2) Read back config to verify
+	//  3) Alter config
+	//  4) Read back config to verify
+	//  5) Delete the topic
+
+	topic := fmt.Sprintf("%s-config-%d", testconf.Topic, rand.Intn(100000))
+
+	// Expected config
+	expResources := []ConfigResourceResult{
+		{
+			Type: ResourceTopic,
+			Name: topic,
+			Config: map[string]ConfigEntryResult{
+				"compression.type": ConfigEntryResult{
+					Name:  "compression.type",
+					Value: "snappy",
+				},
+			},
+		},
+	}
+	// Create topic
+	newTopics := []TopicSpecification{{
+		Topic:             topic,
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+		Config:            map[string]string{"compression.type": "snappy"},
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	topicResult, err := a.CreateTopics(ctx, newTopics)
+	if err != nil {
+		t.Fatalf("Create topic request failed: %v", err)
+	}
+
+	if topicResult[0].Error.Code() != ErrNoError {
+		t.Fatalf("Failed to create topic %s: %s", topic, topicResult[0].Error)
+	}
+
+	// Wait for topic to show up in metadata before performing
+	// subsequent operations on it, otherwise we risk DescribeConfigs()
+	// to fail with UnknownTopic.. (this is really a broker issue).
+	// Sometimes even the metadata is not enough, so we add an
+	// arbitrary 10s sleep too.
+	t.Logf("Waiting for new topic %s to show up in metadata and stabilize", topic)
+	err = waitTopicInMetadata(a, topic, 10*1000) // 10s
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Logf("Topic %s now in metadata, waiting another 10s for stabilization", topic)
+	time.Sleep(10 * 1000 * 1000)
+
+	// Read back config to validate
+	configResources := []ConfigResource{{Type: ResourceTopic, Name: topic}}
+	describeRes, err := a.DescribeConfigs(ctx, configResources)
+	if err != nil {
+		t.Fatalf("Describe configs request failed: %v", err)
+	}
+
+	validateConfig(t, describeRes, expResources, true)
+
+	// Alter some configs.
+	// Configuration alterations are currently atomic, all values
+	// need to be passed, otherwise non-passed values will be reverted
+	// to their default values.
+	// Future versions will allow incremental updates:
+	// https://cwiki.apache.org/confluence/display/KAFKA/KIP-339%3A+Create+a+new+IncrementalAlterConfigs+API
+	newConfig := make(map[string]string)
+	for _, entry := range describeRes[0].Config {
+		newConfig[entry.Name] = entry.Value
+	}
+
+	// Change something
+	newConfig["retention.ms"] = "86400000"
+	newConfig["message.timestamp.type"] = "LogAppendTime"
+
+	for k, v := range newConfig {
+		expResources[0].Config[k] = ConfigEntryResult{Name: k, Value: v}
+	}
+
+	configResources = []ConfigResource{{Type: ResourceTopic, Name: topic, Config: StringMapToConfigEntries(newConfig, AlterOperationSet)}}
+	alterRes, err := a.AlterConfigs(ctx, configResources)
+	if err != nil {
+		t.Fatalf("Alter configs request failed: %v", err)
+	}
+
+	validateConfig(t, alterRes, expResources, false)
+
+	// Read back config to validate
+	configResources = []ConfigResource{{Type: ResourceTopic, Name: topic}}
+	describeRes, err = a.DescribeConfigs(ctx, configResources)
+	if err != nil {
+		t.Fatalf("Describe configs request failed: %v", err)
+	}
+
+	validateConfig(t, describeRes, expResources, true)
+
+	// Delete the topic
+	// FIXME: wait for topics to become available in metadata instead
+	time.Sleep(5000 * time.Millisecond)
+
+	topicResult, err = a.DeleteTopics(ctx, []string{topic})
+	if err != nil {
+		t.Fatalf("DeleteTopics() failed: %s", err)
+	}
+
+	if topicResult[0].Error.Code() != ErrNoError {
+		t.Fatalf("Failed to delete topic %s: %s", topic, topicResult[0].Error)
+	}
+
+}
+
+//Test AdminClient GetMetadata API
+func TestAdminGetMetadata(t *testing.T) {
+	if !testconfRead() {
+		t.Skipf("Missing testconf.json")
+	}
+
+	config := &ConfigMap{"bootstrap.servers": testconf.Brokers}
+	config.updateFromTestconf()
+
+	// Create Admin client
+	a, err := NewAdminClient(config)
+	if err != nil {
+		t.Errorf("Failed to create Admin client: %s\n", err)
+		return
+	}
+	defer a.Close()
+
+	metaData, err := a.GetMetadata(&testconf.Topic, false, 5*1000)
+	if err != nil {
+		t.Errorf("Failed to get meta data for topic %s. Error: %s\n", testconf.Topic, err)
+		return
+	}
+	t.Logf("Meta data for topic %s: %v\n", testconf.Topic, metaData)
+
+	metaData, err = a.GetMetadata(nil, true, 5*1000)
+	if err != nil {
+		t.Errorf("Failed to get meta data, Error: %s\n", err)
+		return
+	}
+	t.Logf("Meta data for admin client: %v\n", metaData)
+
 }
