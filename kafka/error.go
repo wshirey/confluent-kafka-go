@@ -24,7 +24,9 @@ package kafka
 #include <stdlib.h>
 #include <librdkafka/rdkafka.h>
 */
+
 import "C"
+import "fmt"
 
 import (
 	"fmt"
@@ -36,6 +38,14 @@ type Error struct {
 	code  ErrorCode
 	str   string
 	fatal bool
+}
+
+// NewError creates a new pointer to an Error instance with an optional message
+func NewError(code ErrorCode, str error) *Error {
+	return &Error{
+		code: code,
+		str: fmt.Sprintf("%s: %s", code, str),
+	}
 }
 
 func newError(code C.rd_kafka_resp_err_t) (err Error) {
